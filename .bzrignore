@@ -2,3 +2,8 @@ bin
 test.jar
 .classpath
 .settings/org.eclipse.jdt.core.prefs
+target/test-classes
+target/classes
+target/surefire-reports
+target/maven-archiver
+target/hadoop-test-1.0-SNAPSHOT.jar
