@@ -7,3 +7,11 @@ target/classes
 target/surefire-reports
 target/maven-archiver
 target/hadoop-test-1.0-SNAPSHOT.jar
+.settings
+.scala_dependencies
+target/archive-tmp
+target/classes.timestamp
+target/hadoop-scala-1.0-SNAPSHOT-jar-with-dependencies.jar
+target/hadoop-scala-1.0-SNAPSHOT.jar
+target/test-classes.timestamp
+.project

@@ -14,27 +14,21 @@
  * permissions and limitations under the License.
  */
 
-package test;
+package test
 
-import java.io.IOException;
-import java.util.Iterator;
-import java.util.StringTokenizer;
+//import java.io.IOException;
+import java.util.Iterator
+import java.util.StringTokenizer
 
-import org.apache.hadoop.conf.Configuration;
-import org.apache.hadoop.conf.Configured;
-import org.apache.hadoop.fs.FileSystem;
-import org.apache.hadoop.fs.Path;
-import org.apache.hadoop.io.IntWritable;
-import org.apache.hadoop.io.LongWritable;
-import org.apache.hadoop.io.Text;
-import org.apache.hadoop.mapreduce.Job;
-import org.apache.hadoop.mapreduce.Mapper;
-import org.apache.hadoop.mapreduce.Reducer;
-import org.apache.hadoop.mapreduce.lib.input.FileInputFormat;
-import org.apache.hadoop.mapreduce.lib.output.FileOutputFormat;
-import org.apache.hadoop.util.Tool;
-import org.apache.hadoop.util.ToolRunner;
-import org.apache.log4j.Logger;
+
+import org.apache.hadoop.conf.{Configuration,Configured}
+import org.apache.hadoop.fs.{FileSystem,Path}
+import org.apache.hadoop.io.{IntWritable,LongWritable,Text}
+import org.apache.hadoop.mapreduce.{Job,Mapper,Reducer}
+import org.apache.hadoop.mapreduce.lib.input.FileInputFormat
+import org.apache.hadoop.mapreduce.lib.output.FileOutputFormat
+import org.apache.hadoop.util.{Tool,ToolRunner}
+import org.apache.log4j.Logger
 
 /**
  * <p>
@@ -50,7 +44,100 @@ import org.apache.log4j.Logger;
  * 
  * @author Jimmy Lin
  */
-public class RunTest extends Configured implements Tool {
+
+abstract class runTest extends Configured with Tool{}
+
+object runTest extends Configured with Tool{
+	private val logger = Logger.getLogger(classOf[runTest])
+	
+	private class mapper extends Mapper[LongWritable,Text,Text,IntWritable] {}
+	private object mapper extends Mapper[LongWritable,Text,Text,IntWritable] {
+		private val one = new IntWritable(1)
+		private var word = new Text()
+		
+		def map(key: LongWritable, value: Text, context: Context) = {
+			var line = value.asInstanceOf[Text].toString()
+			var iterator = new StringTokenizer(line)
+			
+			while(iterator.hasMoreTokens()){
+				word.set(iterator.nextToken())
+				context.write(word, one)
+			}
+		}
+	}
+	
+	private class reducer extends Reducer[Text, IntWritable, Text, IntWritable]{}
+	private object reducer extends Reducer[Text, IntWritable, Text, IntWritable]{
+		private val sumValue = new IntWritable()
+		
+		def reduce(key: Text, values: Iterable[IntWritable], context: Context) = {
+			var iter = values.iterator
+			var sum = 0;
+			while(iter.hasNext){
+				sum += iter.next().get()
+			}
+			sumValue.set(sum)
+			context.write(key, sumValue)
+		}
+	}
+	
+	private def printUsage() = {
+		System.out.println("usage: [input-path] [output-path] [num-reducers]")
+		ToolRunner.printGenericCommandUsage(System.out)
+	}
+	
+	def run(args: Array[String]): Int = {
+		if (args.length != 3) {
+			printUsage()
+			return -1
+		}
+		
+		var (inputPath, outputPath, reduceTasks) = (args(0), args(1), args(2).toInt)
+		
+		logger.info("Tool: DemoWordCount");
+		logger.info(" - input path: " + inputPath);
+		logger.info(" - output path: " + outputPath);
+		logger.info(" - number of reducers: " + reduceTasks);
+		
+		var conf = new Configuration()
+		var job = new Job(conf, "DemoWordCount")
+		job.setJarByClass(classOf[runTest])
+		
+		job.setNumReduceTasks(reduceTasks)
+		
+		FileInputFormat.setInputPaths(job, new Path(inputPath))
+		FileOutputFormat.setOutputPath(job, new Path(outputPath))
+
+		job.setOutputKeyClass(classOf[Text])
+		job.setOutputValueClass(classOf[IntWritable])
+
+		job.setMapperClass(classOf[mapper])
+		job.setCombinerClass(classOf[reducer])
+		job.setReducerClass(classOf[reducer])
+
+		// Delete the output directory if it exists already
+		var outputDir = new Path(outputPath)
+		FileSystem.get(conf).delete(outputDir, true)
+
+		var startTime = System.currentTimeMillis()
+		job.waitForCompletion(true)
+		logger.info("Job Finished in " + (System.currentTimeMillis() - startTime) / 1000.0
+				+ " seconds")
+
+		return 0
+	}
+
+	/**
+	 * Dispatches command-line arguments to the tool via the
+	 * <code>ToolRunner</code>.
+	 */
+	def main (args: Array[String]) = {
+		//println("hello")
+		System.exit(ToolRunner.run(new Configuration(), this, args))
+	}
+}
+
+/*public class RunTest extends Configured implements Tool {
 	private static final Logger sLogger = Logger.getLogger(RunTest.class);
 
 	// mapper: emits (token, 1) for every word occurrence
@@ -159,4 +246,23 @@ public class RunTest extends Configured implements Tool {
 		int res = ToolRunner.run(new Configuration(), new RunTest(), args);
 		System.exit(res);
 	}
-}
+}*/
+
+
+/*package test
+
+
+
+/**
+ * @author ${user.name}
+ */
+object App {
+  
+  def foo(x : Array[String]) = x.foldLeft("")((a,b) => a + b)
+  
+  def main(args : Array[String]) {
+    println( "Hello World!" )
+    println("concat arguments = " + foo(args))
+  }
+
+}*/
