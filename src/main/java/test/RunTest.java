@@ -13,25 +13,35 @@
  * permissions and limitations under the License.
  */
 
-package test
+package test;
 
-import java.lang.Iterable
+import java.io.IOException;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.HashMap;
+import java.util.Map;
 
-import java.io.{DataOutput, DataInput}
-import java.util.{Iterator,StringTokenizer}
+import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.conf.Configured;
+import org.apache.hadoop.fs.FileSystem;
+import org.apache.hadoop.fs.Path;
+import org.apache.hadoop.io.IntWritable;
+import org.apache.hadoop.io.LongWritable;
+import org.apache.hadoop.io.ArrayWritable;
+import org.apache.hadoop.io.Text;
+import org.apache.hadoop.io.Writable;
+import org.apache.hadoop.io.WritableComparable;
+import org.apache.hadoop.io.GenericWritable;
+import org.apache.hadoop.mapreduce.Job;
+import org.apache.hadoop.mapreduce.Mapper;
+import org.apache.hadoop.mapreduce.Reducer;
+import org.apache.hadoop.mapreduce.lib.partition.HashPartitioner;
+import org.apache.hadoop.mapreduce.lib.input.FileInputFormat;
+import org.apache.hadoop.mapreduce.lib.output.FileOutputFormat;
+import org.apache.hadoop.util.Tool;
+import org.apache.hadoop.util.ToolRunner;
+import org.apache.log4j.Logger;
 
-import org.apache.hadoop.conf.{Configuration,Configured}
-import org.apache.hadoop.fs.{FileSystem,Path}
-import org.apache.hadoop.io.{IntWritable,LongWritable,ArrayWritable,Text,Writable,WritableComparable,GenericWritable}
-import org.apache.hadoop.mapreduce.{Job,Mapper,Reducer,TaskAttemptID,RecordReader,RecordWriter,OutputCommitter,StatusReporter,InputSplit}
-import org.apache.hadoop.mapreduce.lib.partition.HashPartitioner
-import org.apache.hadoop.mapreduce.lib.input.FileInputFormat
-import org.apache.hadoop.mapreduce.lib.output.FileOutputFormat
-import org.apache.hadoop.util.{Tool,ToolRunner}
-import org.apache.log4j.Logger
-
-import scala.collection.mutable.{Map,ArrayBuffer}
-import scala.collection.JavaConversions._
 
 /**
  * <p>
@@ -47,272 +57,182 @@ import scala.collection.JavaConversions._
  *
  */
 
-abstract class runTest extends Configured with Tool{}
 
-object runTest extends Configured with Tool{
-	private val logger = Logger.getLogger(classOf[runTest])
-	type mapperInKey = LongWritable
-	type mapperInValue = Text
-	type mapperOutKey = WritableComparableObj[Text,Text]
-	type mapperOutValue = ArrayWritable
-	type mapperType = Mapper[mapperInKey, mapperInValue, mapperOutKey, mapperOutValue]
-	type reducerOutValue = ArrayWritable
-	type reducerType = Reducer[mapperOutKey, mapperOutValue, Text, reducerOutValue]
-	type partitionerType = HashPartitioner[mapperOutKey/*Text*/, mapperOutValue]
+class RunTest extends Configured implements Tool{
+	private final Logger logger = Logger.getLogger(RunTest.class);
 	
-	class WritableTuple2[T1 <: WritableComparable[T1], T2 <: WritableComparable[T2]](_1: T1, _2: T2) extends Tuple2[T1, T2](_1: T1, _2: T2) with WritableComparable[WritableTuple2[T1, T2]]{
-		override def write(out: DataOutput) = {
-			_1.write(out)
-			_2.write(out)
+	class WritableTuple2<T1 extends Writable, T2 extends Writable> extends GenericWritable{
+		T1 _1;
+		T2 _2;
+		
+		public WritableTuple2(T1 _1, T2 _2) {
+			this._1 = _1;
+			this._2 = _2;
 		}
-		override def readFields(in: DataInput) = {
-			_1.readFields(in)
-			_2.readFields(in)
+		
+		@SuppressWarnings("unchecked")
+		protected Class<? extends Writable>[] getTypes() {
+			return new Class[]{_1.getClass(), _2.getClass()};
 		}
-		override def compareTo(o: WritableTuple2[T1, T2]):Int = {
-			var result = _1.compareTo(o._1)
+	}
+	
+	class WritableComparableTuple2<T1 extends WritableComparable<? super T1>, T2 extends WritableComparable<? super T2>> 
+		extends WritableTuple2<T1,T2> 
+		implements WritableComparable<WritableComparableTuple2<T1,T2>>{
+		
+		public WritableComparableTuple2(T1 _1, T2 _2) {
+			super(_1, _2);
+		}
+
+		public int compareTo(WritableComparableTuple2<T1,T2> o){
+			int result = _1.compareTo(o._1);
 			if (result == 0){
-				result = _2.compareTo(o._2)
+				return _2.compareTo(o._2);
 			}
-			result
+			return result;
 		}
 	}
-	
-	class WritableObj[T1 <: Writable, T2 <: Writable]()
-		extends GenericWritable{
+	private class mapper extends Mapper<LongWritable,Text,WritableComparableTuple2<Text,Text>,ArrayWritable>{
+		//these were all static
+		Text word = new Text();
+		Text title = new Text();
+		WritableComparableTuple2<Text,Text> wordplustitle;
+		final ArrayWritable positionArray = new ArrayWritable(IntWritable.class);
+		ArrayList<IntWritable> positionsList;
+		final IntWritable[] dummyArray = new IntWritable[0];
 		
-		private var _a: Option[T1] = None
-		private var _b: Option[T2] = None
-		
-		def _1 = {
-			_a match {
-				case Some(e) => e
-				case None => throw new NullPointerException()
+		@Override
+		public void map(LongWritable key, Text value, Context context) throws IOException, InterruptedException {
+			String[] line = value.toString().split("\t",2);
+			title.set(line[0]);
+			HashMap<WritableComparableTuple2<Text,Text>,ArrayList<IntWritable>> postings = new HashMap<WritableComparableTuple2<Text,Text>,ArrayList<IntWritable>>();
+			int position = 0;
+			for (String w : line[1].split("\\s")){
+				word.set(w);
+				wordplustitle = new WritableComparableTuple2<Text,Text>(word, title);
+				positionsList = postings.containsKey(wordplustitle)?postings.get(wordplustitle):new ArrayList<IntWritable>();
+				positionsList.add(new IntWritable(position));
+				postings.put(wordplustitle , positionsList);
+				logger.debug("word: "+word+" title: "+title+" data: "+positionsList);
+				position += w.length();
 			}
-		}
-		
-		def _1_=(a: T1) ={
-			_a = Some(a)
-		}
-		
-		def _2 = {
-			_b match {
-				case Some(e) => e
-				case None => throw new NullPointerException()
-			}
-		}
-		
-		def _2_=(b: T2) ={
-			_b = Some(b)
-		}
-		
-		def this(a: T1, b: T2){
-			this()
-			_1 = a
-			_2 = b
-		}
-		
-		def getTypes() = {
-			Array(_1.getClass.asInstanceOf[Class[T1]], _2.getClass.asInstanceOf[Class[T2]])
-			//see: http://stackoverflow.com/questions/1135248/scala-equivalent-of-java-java-lang-classt-object
-			//and: http://lampsvn.epfl.ch/trac/scala/ticket/490
-		}
-	}
-	
-	/*
-	class WritableComparableObj[T1 <: WritableComparable[_>:T1b], T2 <: WritableComparable[_>:T2b],T1b,T2b]()(implicit ev1: T1=:=T1b, ev2: T2=:=T2b)
-	making it generic only for types comparable with only its superclasses, necessitates of the implicit field, this creates a problem when 
-	overloading the costructor by having both the full one, and a no-args one (needed for some hadoop initialization of the job)
-	*/
-	class WritableComparableObj[T1 <: WritableComparable[_], T2 <: WritableComparable[_]]
-		extends WritableObj[T1,T2]()
-		with WritableComparable[WritableComparableObj[T1, T2]]{
-		
-		private var _a: Option[T1] = None
-		private var _b: Option[T2] = None
-		
-		def this(a: T1, b: T2) = {
-			this()
-			_1 = a
-			_2 = b
-		}
-		
-		override def compareTo(o: WritableComparableObj[T1, T2]): Int = {
-			var result = _1.compareTo(o._1)
-			if (result == 0){
-				result = _2.compareTo(o._2)
-			}
-			result
-		}
-	}
-	
-	/*implicit def tuple2ToWritable[T1 <: WritableComparable[T1], T2 <: WritableComparable[T2]](t: Tuple2[T1, T2]): WritableObj[T1, T2, T1, T2] = {
-				new WritableObj[T1, T2, T1, T2](t._1, t._2)
-	}*/
-	
-	implicit def textTuple2ToWritable(t: Tuple2[Text, Text]): WritableComparableObj[Text,Text] = {
-		new WritableComparableObj[Text,Text](t._1, t._2)
-	}
-	
-	implicit def postTuple2ToWritable(t: Tuple2[Text, ArrayWritable]) = {
-		new WritableObj[Text,ArrayWritable](t._1, t._2)
-	}
-		
-	private class mapper extends mapperType {
-		
-		/*class Context(conf: Configuration, taskid: TaskAttemptID, reader: RecordReader[mapperInKey,mapperInValue],  writer: RecordWriter[mapperOutKey,mapperOutValue], committer: OutputCommitter, reporter: StatusReporter, split: InputSplit ) 
-			extends super.Context(conf, taskid, reader,  writer, committer, reporter, split){
-			type TupleType = Tuple2[Text,Text] // don't know why, but otherwise the view bound doesn't work
-			
-			def write[TupleType <% WritableComparableObj[Text,Text,Text,Text]](key: TupleType, value: mapperOutValue) = {
-				logger.info("MYCONTEXT WRITE CALLED")
-				super.write(key, value)
-			}
-		}*/
-		
-		/*class Context(superwriter: (mapperOutKey, mapperOutValue) => Unit){
-			type TupleType = Tuple2[Text,Text] // don't know why, but otherwise the view bound doesn't work
-			
-			def write[TupleType <% mapperOutKey](key: TupleType, value: mapperOutValue) = {
-				logger.info("MYCONTEXT WRITE CALLED")
-				superwriter(key, value)
-			}
-		}
-		
-		implicit def toInnerContext(context: mapperType#Context) =
-			new Context(context.write(_,_))*/
-		
-		override def map(key: LongWritable, value: Text, context: mapperType#Context) = {
-			var line = value.toString().split("\t",2)
-			mapper.title.set(line(0))
-			var postings: Map[(Text,Text),ArrayBuffer[IntWritable]] = Map()
-			var position = 0
-			for (w <- line(1).split("\\s")){
-				mapper.word.set(w)
-				postings((mapper.word, mapper.title)) =
-					postings.getOrElse((mapper.word, mapper.title), new ArrayBuffer()) += new IntWritable(position)
-				logger.debug("word: "+mapper.word+" title: "+mapper.title+" data: "+postings((mapper.word, mapper.title)))
-				position += w.length
-			}
-			for ( (key, positions) <- postings.iterator){
-				mapper.positionArray.set(positions.toArray)
-				context.write(
-						new WritableComparableObj[Text,Text](key._1,key._2),
-						mapper.positionArray)
+			for ( Map.Entry<WritableComparableTuple2<Text,Text>,ArrayList<IntWritable>> entry : postings.entrySet() ){
+				positionArray.set(entry.getValue().toArray(dummyArray));
+				context.write(entry.getKey(), positionArray);
 			}
 			
 			// emit/save total document length
 		}
-		
-	}
-	private object mapper extends mapperType {
-		private var word = new Text()
-		private var title = new Text()
-		private val positionArray = new ArrayWritable(classOf[IntWritable])
 	}
 	
-	/*class partitioner extends partitionerType{
-		override def getPartition(key: mapperOutKey, value: mapperOutValue, numPartitions: Int): Int = {
-			logger.info("PARTITIONER CALLED")
-			return (key._1.hashCode())%numPartitions
+	class partitioner extends HashPartitioner<WritableComparableTuple2<Text,Text>, ArrayWritable>{
+
+		public int getPartition(WritableComparableTuple2<Text,Text> key, ArrayWritable value, int numPartitions){
+			logger.info("PARTITIONER CALLED");
+			return (key._1.hashCode())%numPartitions;
 			//super.getPartition(key._1, value, numPartitions)
 		}
-	}*/
-	
-	private class reducer extends reducerType{
-		var previousWord: Text = null
-		val postings = new ArrayWritable(classOf[WritableObj[Text,mapperOutValue]])
-		val postingsBuffer = new ArrayBuffer[WritableObj[Text,mapperOutValue]]()
-		val positionsArray = new ArrayWritable(classOf[mapperOutValue])
-		var tempArray = new ArrayWritable(classOf[mapperOutValue])
-				
-		override def reduce(key: mapperOutKey, values: Iterable[mapperOutValue], context: reducerType#Context) = {
-			logger.info("REDUCER CALLED")
-			if (key._1 != previousWord && previousWord != null){
-				postings.set(postingsBuffer.toArray)
-				context.write(previousWord, postings)
-				postingsBuffer.clear()
-			}
-			tempArray = new ArrayWritable(classOf[mapperOutValue])
-			tempArray.set(values.map(v => v.toArray.asInstanceOf[Array[Writable]]).foldLeft(Array[Writable]())(_++_))
-					
-			postingsBuffer += ((key._2, tempArray))
-			previousWord = key._1
+	}
+		
+	private class reducer extends Reducer<WritableComparableTuple2<Text,Text>,ArrayWritable,Text,ArrayWritable>{
+			Text previousWord = null;
+			final ArrayWritable postings = new ArrayWritable(WritableTuple2.class);
+			final ArrayList<WritableTuple2<Text, ArrayWritable>> postingsBuffer = new ArrayList<WritableTuple2<Text, ArrayWritable>>();
+			ArrayWritable tempArray = new ArrayWritable(ArrayWritable.class);
+			final ArrayList<IntWritable> mergedList = new ArrayList<IntWritable>();
 			
-			/*var iter = values.iterator
-			var sum = 0;
-			while(iter.hasNext){
-				sum += iter.next().get()
+			final IntWritable[] dummyArrayInt = new IntWritable[0];
+			@SuppressWarnings("unchecked")
+			final WritableTuple2[] dummyArrayTuple = new WritableTuple2[0]; 
+					
+			@Override
+			protected void reduce(WritableComparableTuple2<Text,Text> key, Iterable<ArrayWritable> values, Context context)
+				throws IOException, InterruptedException{
+				
+				logger.info("REDUCER CALLED");
+				if (key._1 != previousWord && previousWord != null){
+					postings.set(postingsBuffer.toArray(dummyArrayTuple));
+					context.write(previousWord, postings);
+					postingsBuffer.clear();
+				}
+				
+				for (ArrayWritable v : values){
+					mergedList.addAll(Arrays.asList((IntWritable[])v.toArray()));
+				}
+				tempArray.set(mergedList.toArray(dummyArrayInt));
+				mergedList.clear();
+						
+				postingsBuffer.add(new WritableTuple2<Text, ArrayWritable>(key._2, tempArray));
+				previousWord = key._1;
+				
 			}
-			reducer.sumValue.set(sum)
-			context.write(key, reducer.sumValue)*/
+			
+			@Override
+			protected void cleanup(Context context) throws IOException, InterruptedException{
+				postings.set(postingsBuffer.toArray(dummyArrayTuple));
+				context.write(previousWord, postings);
+			}
 		}
 		
-		override def cleanup(context: reducerType#Context) = {
-			postings.set(postingsBuffer.toArray)
-			context.write(previousWord, postings)
+		private void printUsage(){
+			System.out.println("usage: [input-path] [output-path] [num-reducers]");
+			ToolRunner.printGenericCommandUsage(System.out);
 		}
-	}
-	private object reducer extends reducerType{
-		private val sumValue = new IntWritable()
-	}
+		
+		public int run(String[] args) throws Exception{
+			if (args.length != 3) {
+				printUsage();
+				return -1;
+			}
+			
+			String inputPath = args[0];
+			String outputPath = args[1];
+			int reduceTasks = Integer.parseInt(args[2]);
+			
+			logger.info("Tool: DemoWordCount");
+			logger.info(" - input path: " + inputPath);
+			logger.info(" - output path: " + outputPath);
+			logger.info(" - number of reducers: " + reduceTasks);
+			
+			Configuration conf = new Configuration();
+			Job job = new Job(conf, "Indexer");
+			job.setJarByClass(RunTest.class);
+			
+			job.setNumReduceTasks(reduceTasks);
+			
+			FileInputFormat.setInputPaths(job, new Path(inputPath));
+			FileOutputFormat.setOutputPath(job, new Path(outputPath));
+			
+			job.setMapOutputKeyClass(WritableComparableTuple2.class);
+			
+			job.setOutputKeyClass(Text.class);
+			job.setOutputValueClass(ArrayWritable.class);
+
+			job.setMapperClass(mapper.class);
+			job.setCombinerClass(reducer.class);
+			job.setPartitionerClass(partitioner.class);
+			job.setReducerClass(reducer.class);
+
+			// Delete the output directory if it exists already
+			Path outputDir = new Path(outputPath);
+			FileSystem.get(conf).delete(outputDir, true);
+
+			Long startTime = System.currentTimeMillis();
+			
+			job.waitForCompletion(true);
+			
+			logger.info("Job Finished in " + (System.currentTimeMillis() - startTime) / 1000.0
+					+ " seconds");
+
+			return 0;
+		}
 	
-	private def printUsage() = {
-		System.out.println("usage: [input-path] [output-path] [num-reducers]")
-		ToolRunner.printGenericCommandUsage(System.out)
-	}
-	
-	def run(args: Array[String]): Int = {
-		if (args.length != 3) {
-			printUsage()
-			return -1
+		/**
+		 * Dispatches command-line arguments to the tool via the
+		 * <code>ToolRunner</code>.
+		 */
+		public static void main (String[] args) throws Exception{
+			System.exit(ToolRunner.run(new Configuration(), new RunTest(), args));
 		}
-		
-		var (inputPath, outputPath, reduceTasks) = (args(0), args(1), args(2).toInt)
-		
-		logger.info("Tool: DemoWordCount");
-		logger.info(" - input path: " + inputPath);
-		logger.info(" - output path: " + outputPath);
-		logger.info(" - number of reducers: " + reduceTasks);
-		
-		var conf = new Configuration()
-		var job = new Job(conf, "DemoWordCount")
-		job.setJarByClass(classOf[runTest])
-		
-		job.setNumReduceTasks(reduceTasks)
-		
-		FileInputFormat.setInputPaths(job, new Path(inputPath))
-		FileOutputFormat.setOutputPath(job, new Path(outputPath))
-		
-		job.setMapOutputKeyClass(classOf[mapperOutKey])
-		
-		job.setOutputKeyClass(classOf[Text])
-		job.setOutputValueClass(classOf[reducerOutValue])
 
-		job.setMapperClass(classOf[mapper])
-		job.setCombinerClass(classOf[reducer])
-		//job.setPartitionerClass(classOf[partitioner])
-		job.setReducerClass(classOf[reducer])
-
-		// Delete the output directory if it exists already
-		var outputDir = new Path(outputPath)
-		FileSystem.get(conf).delete(outputDir, true)
-
-		var startTime = System.currentTimeMillis()
-		
-		job.waitForCompletion(true)
-		
-		logger.info("Job Finished in " + (System.currentTimeMillis() - startTime) / 1000.0
-				+ " seconds")
-
-		return 0
-	}
-
-	/**
-	 * Dispatches command-line arguments to the tool via the
-	 * <code>ToolRunner</code>.
-	 */
-	def main (args: Array[String]) = {
-		System.exit(ToolRunner.run(new Configuration(), this, args))
-	}
 }
