@@ -22,7 +22,7 @@ import java.util.{Iterator,StringTokenizer}
 
 import org.apache.hadoop.conf.{Configuration,Configured}
 import org.apache.hadoop.fs.{FileSystem,Path}
-import org.apache.hadoop.io.{IntWritable,LongWritable,ArrayWritable,Text,Writable,WritableComparable,GenericWritable}
+import org.apache.hadoop.io.{IntWritable,LongWritable,ArrayWritable,Text,BinaryComparable,Writable,WritableComparable,GenericWritable}
 import org.apache.hadoop.mapreduce.{Job,Mapper,Reducer,TaskAttemptID,RecordReader,RecordWriter,OutputCommitter,StatusReporter,InputSplit}
 import org.apache.hadoop.mapreduce.lib.partition.HashPartitioner
 import org.apache.hadoop.mapreduce.lib.input.FileInputFormat
@@ -53,12 +53,24 @@ object runTest extends Configured with Tool{
 	private val logger = Logger.getLogger(classOf[runTest])
 	type mapperInKey = LongWritable
 	type mapperInValue = Text
-	type mapperOutKey = WritableComparableObj[Text,Text]
+	type mapperOutKey = WritableComparableObj[BinaryComparable,BinaryComparable]
 	type mapperOutValue = ArrayWritable
 	type mapperType = Mapper[mapperInKey, mapperInValue, mapperOutKey, mapperOutValue]
 	type reducerOutValue = ArrayWritable
 	type reducerType = Reducer[mapperOutKey, mapperOutValue, Text, reducerOutValue]
 	type partitionerType = HashPartitioner[mapperOutKey/*Text*/, mapperOutValue]
+	
+	/*implicit def tuple2ToWritable[T1 <: WritableComparable[T1], T2 <: WritableComparable[T2]](t: Tuple2[T1, T2]): WritableObj[T1, T2, T1, T2] = {
+				new WritableObj[T1, T2, T1, T2](t._1, t._2)
+	}*/
+	
+	implicit def textTuple2ToWritable(t: Tuple2[Text, Text]): WritableComparableObj[Text,Text] = {
+		new WritableComparableObj[Text,Text](t._1, t._2)
+	}
+	
+	implicit def postTuple2ToWritable(t: Tuple2[Text, ArrayWritable]) = {
+		new WritableObj[Text,ArrayWritable](t._1, t._2)
+	}
 	
 	class WritableTuple2[T1 <: WritableComparable[T1], T2 <: WritableComparable[T2]](_1: T1, _2: T2) extends Tuple2[T1, T2](_1: T1, _2: T2) with WritableComparable[WritableTuple2[T1, T2]]{
 		override def write(out: DataOutput) = {
@@ -119,19 +131,22 @@ object runTest extends Configured with Tool{
 		}
 	}
 	
-	/*
-	class WritableComparableObj[T1 <: WritableComparable[_>:T1b], T2 <: WritableComparable[_>:T2b],T1b,T2b]()(implicit ev1: T1=:=T1b, ev2: T2=:=T2b)
-	making it generic only for types comparable with only its superclasses, necessitates of the implicit field, this creates a problem when 
-	overloading the costructor by having both the full one, and a no-args one (needed for some hadoop initialization of the job)
-	*/
-	class WritableComparableObj[T1 <: WritableComparable[_], T2 <: WritableComparable[_]]
-		extends WritableObj[T1,T2]()
+	class WritableComparableObj[T1 <: WritableComparable[T1], T2 <: WritableComparable[T2]]
+		extends WritableObj[WritableComparable[_ >: T1], WritableComparable[_ >: T2]]()
 		with WritableComparable[WritableComparableObj[T1, T2]]{
 		
 		private var _a: Option[T1] = None
 		private var _b: Option[T2] = None
 		
-		def this(a: T1, b: T2) = {
+		override def _1: T1 = {
+			super._1.asInstanceOf[T1]
+		}
+		
+		override def _2: T2 = {
+			super._1.asInstanceOf[T2]
+		}
+		
+		def this(a: WritableComparable[_ >: T1], b: WritableComparable[_ >: T2]) = {
 			this()
 			_1 = a
 			_2 = b
@@ -144,18 +159,6 @@ object runTest extends Configured with Tool{
 			}
 			result
 		}
-	}
-	
-	/*implicit def tuple2ToWritable[T1 <: WritableComparable[T1], T2 <: WritableComparable[T2]](t: Tuple2[T1, T2]): WritableObj[T1, T2, T1, T2] = {
-				new WritableObj[T1, T2, T1, T2](t._1, t._2)
-	}*/
-	
-	implicit def textTuple2ToWritable(t: Tuple2[Text, Text]): WritableComparableObj[Text,Text] = {
-		new WritableComparableObj[Text,Text](t._1, t._2)
-	}
-	
-	implicit def postTuple2ToWritable(t: Tuple2[Text, ArrayWritable]) = {
-		new WritableObj[Text,ArrayWritable](t._1, t._2)
 	}
 		
 	private class mapper extends mapperType {
@@ -197,8 +200,9 @@ object runTest extends Configured with Tool{
 			for ( (key, positions) <- postings.iterator){
 				mapper.positionArray.set(positions.toArray)
 				context.write(
-						new WritableComparableObj[Text,Text](key._1,key._2),
-						mapper.positionArray)
+						new WritableComparableObj[BinaryComparable,BinaryComparable](key._1.asInstanceOf[Text],key._2.asInstanceOf[Text]),
+						mapper.positionArray
+				)
 			}
 			
 			// emit/save total document length
@@ -236,8 +240,8 @@ object runTest extends Configured with Tool{
 			tempArray = new ArrayWritable(classOf[mapperOutValue])
 			tempArray.set(values.map(v => v.toArray.asInstanceOf[Array[Writable]]).foldLeft(Array[Writable]())(_++_))
 					
-			postingsBuffer += ((key._2, tempArray))
-			previousWord = key._1
+			postingsBuffer += ((key._2.asInstanceOf[Text], tempArray))
+			previousWord = key._1.asInstanceOf[Text]
 			
 			/*var iter = values.iterator
 			var sum = 0;
