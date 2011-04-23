@@ -22,7 +22,7 @@ import java.util.{Iterator,StringTokenizer}
 
 import org.apache.hadoop.conf.{Configuration,Configured}
 import org.apache.hadoop.fs.{FileSystem,Path}
-import org.apache.hadoop.io.{IntWritable,LongWritable,ArrayWritable,Text,BinaryComparable,Writable,WritableComparable,GenericWritable}
+import org.apache.hadoop.io.{IntWritable,LongWritable,ArrayWritable,Text,Writable,WritableComparable,GenericWritable}
 import org.apache.hadoop.mapreduce.{Job,Mapper,Reducer,TaskAttemptID,RecordReader,RecordWriter,OutputCommitter,StatusReporter,InputSplit}
 import org.apache.hadoop.mapreduce.lib.partition.HashPartitioner
 import org.apache.hadoop.mapreduce.lib.input.FileInputFormat
@@ -53,113 +53,92 @@ object runTest extends Configured with Tool{
 	private val logger = Logger.getLogger(classOf[runTest])
 	type mapperInKey = LongWritable
 	type mapperInValue = Text
-	type mapperOutKey = WritableComparableObj[BinaryComparable,BinaryComparable]
+	type mapperOutKey = WritableTuple2
 	type mapperOutValue = ArrayWritable
 	type mapperType = Mapper[mapperInKey, mapperInValue, mapperOutKey, mapperOutValue]
 	type reducerOutValue = ArrayWritable
 	type reducerType = Reducer[mapperOutKey, mapperOutValue, Text, reducerOutValue]
-	type partitionerType = HashPartitioner[mapperOutKey/*Text*/, mapperOutValue]
+	type partitionerType = HashPartitioner[mapperOutKey, mapperOutValue]
+	
+	class GenericType() extends GenericWritable with WritableComparable[GenericType]{
+		override def compareTo(o: GenericType):Int = {
+			var thisWritable = get()
+			var oWritable = o.get()
+			if (thisWritable.getClass != oWritable.getClass){
+				throw new RuntimeException("mismatched types for " + thisWritable + " and " + oWritable )
+			}
+			thisWritable.asInstanceOf[WritableComparable[_]].compareTo(oWritable)
+		}
+		
+		def getTypes() = {
+			Array(classOf[Text])
+		}
+	}
+	
+	class WritableTuple2() extends WritableComparable[WritableTuple2]{
+		var _1, _2 = new GenericType()
+		
+		def this(_1: GenericWritable, _2: GenericWritable){
+			this()
+		}
+		
+		override def write(out: DataOutput) = {
+			_1.write(out)
+			_2.write(out)
+		}
+		
+		override def readFields(in: DataInput) = {
+			_1.readFields(in)
+			_2.readFields(in)
+		}
+		
+		override def compareTo(o: WritableTuple2):Int = {
+			var result = _1.compareTo(o._1)
+			if (result == 0){
+				result = _2.compareTo(o._2)
+			}
+			result
+		}
+	}
+	
+	
+	class TextPair() extends WritableComparable[TextPair]{
+		var _1, _2: Text = new Text()
+		
+		def this(_1: Text, _2: Text){
+			this()
+		}
+		
+		override def write(out: DataOutput) = {
+			_1.write(out)
+			_2.write(out)
+		}
+		
+		override def readFields(in: DataInput) = {
+			_1.readFields(in)
+			_2.readFields(in)
+		}
+		
+		override def compareTo(o: TextPair) = {
+			var result = _1.compareTo(o._1)
+			if (result == 0){
+				result = _2.compareTo(o._2)
+			}
+			result
+		}
+	}
 	
 	/*implicit def tuple2ToWritable[T1 <: WritableComparable[T1], T2 <: WritableComparable[T2]](t: Tuple2[T1, T2]): WritableObj[T1, T2, T1, T2] = {
 				new WritableObj[T1, T2, T1, T2](t._1, t._2)
 	}*/
 	
-	implicit def textTuple2ToWritable(t: Tuple2[Text, Text]): WritableComparableObj[Text,Text] = {
-		new WritableComparableObj[Text,Text](t._1, t._2)
+	implicit def tuple2ToWritable(t: Tuple2[Writable, Writable]): WritableTuple2 = {
+		val g1,g2 = new GenericType()
+		g1.set(t._1)
+		g2.set(t._2)
+		new WritableTuple2(g1, g2)
 	}
 	
-	implicit def postTuple2ToWritable(t: Tuple2[Text, ArrayWritable]) = {
-		new WritableObj[Text,ArrayWritable](t._1, t._2)
-	}
-	
-	class WritableTuple2[T1 <: WritableComparable[T1], T2 <: WritableComparable[T2]](_1: T1, _2: T2) extends Tuple2[T1, T2](_1: T1, _2: T2) with WritableComparable[WritableTuple2[T1, T2]]{
-		override def write(out: DataOutput) = {
-			_1.write(out)
-			_2.write(out)
-		}
-		override def readFields(in: DataInput) = {
-			_1.readFields(in)
-			_2.readFields(in)
-		}
-		override def compareTo(o: WritableTuple2[T1, T2]):Int = {
-			var result = _1.compareTo(o._1)
-			if (result == 0){
-				result = _2.compareTo(o._2)
-			}
-			result
-		}
-	}
-	
-	class WritableObj[T1 <: Writable, T2 <: Writable]()
-		extends GenericWritable{
-		
-		private var _a: Option[T1] = None
-		private var _b: Option[T2] = None
-		
-		def _1 = {
-			_a match {
-				case Some(e) => e
-				case None => throw new NullPointerException()
-			}
-		}
-		
-		def _1_=(a: T1) ={
-			_a = Some(a)
-		}
-		
-		def _2 = {
-			_b match {
-				case Some(e) => e
-				case None => throw new NullPointerException()
-			}
-		}
-		
-		def _2_=(b: T2) ={
-			_b = Some(b)
-		}
-		
-		def this(a: T1, b: T2){
-			this()
-			_1 = a
-			_2 = b
-		}
-		
-		def getTypes() = {
-			Array(_1.getClass.asInstanceOf[Class[T1]], _2.getClass.asInstanceOf[Class[T2]])
-			//see: http://stackoverflow.com/questions/1135248/scala-equivalent-of-java-java-lang-classt-object
-			//and: http://lampsvn.epfl.ch/trac/scala/ticket/490
-		}
-	}
-	
-	class WritableComparableObj[T1 <: WritableComparable[T1], T2 <: WritableComparable[T2]]
-		extends WritableObj[WritableComparable[_ >: T1], WritableComparable[_ >: T2]]()
-		with WritableComparable[WritableComparableObj[T1, T2]]{
-		
-		private var _a: Option[T1] = None
-		private var _b: Option[T2] = None
-		
-		override def _1: T1 = {
-			super._1.asInstanceOf[T1]
-		}
-		
-		override def _2: T2 = {
-			super._1.asInstanceOf[T2]
-		}
-		
-		def this(a: WritableComparable[_ >: T1], b: WritableComparable[_ >: T2]) = {
-			this()
-			_1 = a
-			_2 = b
-		}
-		
-		override def compareTo(o: WritableComparableObj[T1, T2]): Int = {
-			var result = _1.compareTo(o._1)
-			if (result == 0){
-				result = _2.compareTo(o._2)
-			}
-			result
-		}
-	}
 		
 	private class mapper extends mapperType {
 		
@@ -199,10 +178,13 @@ object runTest extends Configured with Tool{
 			}
 			for ( (key, positions) <- postings.iterator){
 				mapper.positionArray.set(positions.toArray)
+				mapper.tp._1.set(key._1)
+				mapper.tp._2.set(key._2)
 				context.write(
-						new WritableComparableObj[BinaryComparable,BinaryComparable](key._1.asInstanceOf[Text],key._2.asInstanceOf[Text]),
-						mapper.positionArray
-				)
+						//new TextPair(key._1,key._2),
+						//new WritableTuple2(mapper.firstKey, mapper.secondKey),
+						mapper.tp,
+						mapper.positionArray)
 			}
 			
 			// emit/save total document length
@@ -213,6 +195,7 @@ object runTest extends Configured with Tool{
 		private var word = new Text()
 		private var title = new Text()
 		private val positionArray = new ArrayWritable(classOf[IntWritable])
+		private val tp = new WritableTuple2()
 	}
 	
 	/*class partitioner extends partitionerType{
@@ -225,8 +208,8 @@ object runTest extends Configured with Tool{
 	
 	private class reducer extends reducerType{
 		var previousWord: Text = null
-		val postings = new ArrayWritable(classOf[WritableObj[Text,mapperOutValue]])
-		val postingsBuffer = new ArrayBuffer[WritableObj[Text,mapperOutValue]]()
+		val postings = new ArrayWritable(classOf[WritableTuple2]) //Text, mapperOutValue
+		val postingsBuffer = new ArrayBuffer[WritableTuple2]() //Text, mapperOutValue
 		val positionsArray = new ArrayWritable(classOf[mapperOutValue])
 		var tempArray = new ArrayWritable(classOf[mapperOutValue])
 				
@@ -240,8 +223,8 @@ object runTest extends Configured with Tool{
 			tempArray = new ArrayWritable(classOf[mapperOutValue])
 			tempArray.set(values.map(v => v.toArray.asInstanceOf[Array[Writable]]).foldLeft(Array[Writable]())(_++_))
 					
-			postingsBuffer += ((key._2.asInstanceOf[Text], tempArray))
-			previousWord = key._1.asInstanceOf[Text]
+			postingsBuffer += ((key._2, tempArray))
+			previousWord = key._1.get.asInstanceOf[Text]
 			
 			/*var iter = values.iterator
 			var sum = 0;
