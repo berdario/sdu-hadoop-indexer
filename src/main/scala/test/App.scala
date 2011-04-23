@@ -53,29 +53,20 @@ object runTest extends Configured with Tool{
 	private val logger = Logger.getLogger(classOf[runTest])
 	type mapperInKey = LongWritable
 	type mapperInValue = Text
-	type mapperOutKey = WritableTuple2
+	type mapperOutKey = TextPair
 	type mapperOutValue = ArrayWritable
 	type mapperType = Mapper[mapperInKey, mapperInValue, mapperOutKey, mapperOutValue]
 	type reducerOutValue = ArrayWritable
 	type reducerType = Reducer[mapperOutKey, mapperOutValue, Text, reducerOutValue]
 	type partitionerType = HashPartitioner[mapperOutKey, mapperOutValue]
 	
-	class GenericType() extends GenericWritable with WritableComparable[GenericType]{
-		override def compareTo(o: GenericType):Int = {
-			var thisWritable = get()
-			var oWritable = o.get()
-			if (thisWritable.getClass != oWritable.getClass){
-				throw new RuntimeException("mismatched types for " + thisWritable + " and " + oWritable )
-			}
-			thisWritable.asInstanceOf[WritableComparable[_]].compareTo(oWritable)
-		}
-		
+	class GenericType() extends GenericWritable{
 		def getTypes() = {
-			Array(classOf[Text])
+			Array(classOf[Text], classOf[ArrayWritable])
 		}
 	}
 	
-	class WritableTuple2() extends WritableComparable[WritableTuple2]{
+	class WritableTuple2() extends Writable{
 		var _1, _2 = new GenericType()
 		
 		def this(_1: GenericWritable, _2: GenericWritable){
@@ -90,14 +81,6 @@ object runTest extends Configured with Tool{
 		override def readFields(in: DataInput) = {
 			_1.readFields(in)
 			_2.readFields(in)
-		}
-		
-		override def compareTo(o: WritableTuple2):Int = {
-			var result = _1.compareTo(o._1)
-			if (result == 0){
-				result = _2.compareTo(o._2)
-			}
-			result
 		}
 	}
 	
@@ -128,9 +111,9 @@ object runTest extends Configured with Tool{
 		}
 	}
 	
-	/*implicit def tuple2ToWritable[T1 <: WritableComparable[T1], T2 <: WritableComparable[T2]](t: Tuple2[T1, T2]): WritableObj[T1, T2, T1, T2] = {
-				new WritableObj[T1, T2, T1, T2](t._1, t._2)
-	}*/
+	implicit def tuple2ToTextPair(t: Tuple2[Text, Text]): TextPair = {
+		new TextPair(t._1, t._2)
+	}
 	
 	implicit def tuple2ToWritable(t: Tuple2[Writable, Writable]): WritableTuple2 = {
 		val g1,g2 = new GenericType()
@@ -178,13 +161,8 @@ object runTest extends Configured with Tool{
 			}
 			for ( (key, positions) <- postings.iterator){
 				mapper.positionArray.set(positions.toArray)
-				mapper.tp._1.set(key._1)
-				mapper.tp._2.set(key._2)
-				context.write(
-						//new TextPair(key._1,key._2),
-						//new WritableTuple2(mapper.firstKey, mapper.secondKey),
-						mapper.tp,
-						mapper.positionArray)
+				
+				context.write(key, mapper.positionArray)
 			}
 			
 			// emit/save total document length
@@ -195,7 +173,6 @@ object runTest extends Configured with Tool{
 		private var word = new Text()
 		private var title = new Text()
 		private val positionArray = new ArrayWritable(classOf[IntWritable])
-		private val tp = new WritableTuple2()
 	}
 	
 	/*class partitioner extends partitionerType{
@@ -224,7 +201,7 @@ object runTest extends Configured with Tool{
 			tempArray.set(values.map(v => v.toArray.asInstanceOf[Array[Writable]]).foldLeft(Array[Writable]())(_++_))
 					
 			postingsBuffer += ((key._2, tempArray))
-			previousWord = key._1.get.asInstanceOf[Text]
+			previousWord = key._1
 			
 			/*var iter = values.iterator
 			var sum = 0;
