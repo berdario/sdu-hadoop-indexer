@@ -58,41 +58,10 @@ import org.apache.log4j.Logger;
  */
 
 
-class RunTest extends Configured implements Tool{
-	private final Logger logger = Logger.getLogger(RunTest.class);
+public class RunTest extends Configured implements Tool{
+	private static final Logger logger = Logger.getLogger(RunTest.class);
 	
-	class WritableTuple2<T1 extends Writable, T2 extends Writable> extends GenericWritable{
-		T1 _1;
-		T2 _2;
-		
-		public WritableTuple2(T1 _1, T2 _2) {
-			this._1 = _1;
-			this._2 = _2;
-		}
-		
-		@SuppressWarnings("unchecked")
-		protected Class<? extends Writable>[] getTypes() {
-			return new Class[]{_1.getClass(), _2.getClass()};
-		}
-	}
-	
-	class WritableComparableTuple2<T1 extends WritableComparable<? super T1>, T2 extends WritableComparable<? super T2>> 
-		extends WritableTuple2<T1,T2> 
-		implements WritableComparable<WritableComparableTuple2<T1,T2>>{
-		
-		public WritableComparableTuple2(T1 _1, T2 _2) {
-			super(_1, _2);
-		}
-
-		public int compareTo(WritableComparableTuple2<T1,T2> o){
-			int result = _1.compareTo(o._1);
-			if (result == 0){
-				return _2.compareTo(o._2);
-			}
-			return result;
-		}
-	}
-	private class mapper extends Mapper<LongWritable,Text,WritableComparableTuple2<Text,Text>,ArrayWritable>{
+	private static class mapper extends Mapper<LongWritable,Text,WritableComparableTuple2<Text,Text>,ArrayWritable>{
 		//these were all static
 		Text word = new Text();
 		Text title = new Text();
@@ -100,6 +69,8 @@ class RunTest extends Configured implements Tool{
 		final ArrayWritable positionArray = new ArrayWritable(IntWritable.class);
 		ArrayList<IntWritable> positionsList;
 		final IntWritable[] dummyArray = new IntWritable[0];
+		
+		public mapper() {}
 		
 		@Override
 		public void map(LongWritable key, Text value, Context context) throws IOException, InterruptedException {
@@ -125,10 +96,9 @@ class RunTest extends Configured implements Tool{
 		}
 	}
 	
-	class partitioner extends HashPartitioner<WritableComparableTuple2<Text,Text>, ArrayWritable>{
-
+	static class partitioner extends HashPartitioner<WritableComparableTuple2<Text,Text>, ArrayWritable>{
+		
 		public int getPartition(WritableComparableTuple2<Text,Text> key, ArrayWritable value, int numPartitions){
-			logger.info("PARTITIONER CALLED");
 			return (key._1.hashCode())%numPartitions;
 			//super.getPartition(key._1, value, numPartitions)
 		}
@@ -226,6 +196,8 @@ class RunTest extends Configured implements Tool{
 
 			return 0;
 		}
+		
+		public RunTest() {}
 	
 		/**
 		 * Dispatches command-line arguments to the tool via the
